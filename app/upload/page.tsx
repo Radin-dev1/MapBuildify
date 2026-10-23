@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
-import { passwordRequired } from "@/lib/auth";
-import { storageMode } from "@/lib/storage";
 import UploadForm from "./UploadForm";
 
-export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Upload · MapBuildify" };
 
 export default function UploadPage() {
@@ -15,7 +12,7 @@ export default function UploadPage() {
         Add screenshots or 3D models of a map, area or prop you want Claude to learn from. Good notes matter: tell
         Claude what to copy, like the palette, scale, density or lighting.
       </p>
-      <UploadForm mode={storageMode()} needsPassword={passwordRequired()} />
+      <UploadForm />
     </div>
   );
 }

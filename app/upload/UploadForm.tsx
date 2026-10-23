@@ -1,10 +1,9 @@
 "use client";
 
-import { upload } from "@vercel/blob/client";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ModelViewer from "@/components/ModelViewer";
-import { loadPassword, savePassword } from "@/lib/client-password";
+import { REPO_NAME, REPO_OWNER, REPO_URL } from "@/lib/config";
+import { commitChanges, exampleRepoDir, loadToken, saveToken, verifyToken, type NewFile } from "@/lib/github";
 import {
   CATEGORIES,
   CATEGORY_LABELS,
@@ -16,6 +15,7 @@ import {
   isPreviewableModel,
   type Asset,
   type Category,
+  type Example,
 } from "@/lib/types";
 
 interface PickedFile {
@@ -27,10 +27,11 @@ interface PickedFile {
 
 type ModelViewerElement = HTMLElement & {
   loaded?: boolean;
-  toBlob(options?: { mimeType?: string; idealAspect?: boolean }): Promise<Blob>;
+  toBlob(options?: { mimeType?: string }): Promise<Blob>;
 };
 
 const ACCEPT = [...IMAGE_EXTENSIONS, ...MODEL_EXTENSIONS].join(",");
+const TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
 
 function slug(text: string): string {
   return text
@@ -41,7 +42,7 @@ function slug(text: string): string {
 }
 
 function safeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(-120) || "file";
+  return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(-100) || "file";
 }
 
 function waitForModel(el: ModelViewerElement): Promise<void> {
@@ -55,9 +56,93 @@ function waitForModel(el: ModelViewerElement): Promise<void> {
   });
 }
 
-export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "local"; needsPassword: boolean }) {
-  const router = useRouter();
-  const [password, setPassword] = useState("");
+function TokenPanel({ onReady }: { onReady: (token: string) => void }) {
+  const [token, setToken] = useState("");
+  const [login, setLogin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const saved = loadToken();
+    if (!saved) return;
+    setToken(saved);
+    verifyToken(saved).then(
+      (user) => {
+        setLogin(user);
+        onReady(saved);
+      },
+      () => saveToken(""),
+    );
+  }, [onReady]);
+
+  async function connect() {
+    setBusy(true);
+    setError("");
+    try {
+      const user = await verifyToken(token.trim());
+      saveToken(token.trim());
+      setLogin(user);
+      onReady(token.trim());
+    } catch (err) {
+      setError((err as Error).message);
+    }
+    setBusy(false);
+  }
+
+  if (login) {
+    return (
+      <div className="token token-ok">
+        <span>
+          Saving to <strong>{REPO_OWNER}/{REPO_NAME}</strong> as <strong>{login}</strong>
+        </span>
+        <button
+          type="button"
+          className="link-btn"
+          onClick={() => {
+            saveToken("");
+            setLogin("");
+            setToken("");
+            onReady("");
+          }}
+        >
+          Forget token
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="token">
+      <p>
+        <strong>Connect GitHub.</strong> Uploads are saved as commits to{" "}
+        <a href={REPO_URL}>{REPO_OWNER}/{REPO_NAME}</a>, and GitHub Pages republishes the site. Create a{" "}
+        <a href={TOKEN_URL} target="_blank" rel="noreferrer">
+          fine-grained token
+        </a>{" "}
+        with access to only that repository and <em>Contents: Read and write</em>, then paste it here. It stays in
+        this browser.
+      </p>
+      <div className="token-row">
+        <input
+          className="input"
+          type="password"
+          placeholder="github_pat_…"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          autoComplete="off"
+          aria-label="GitHub token"
+        />
+        <button type="button" className="btn" onClick={connect} disabled={busy || !token.trim()}>
+          {busy ? "Checking…" : "Connect"}
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+export default function UploadForm() {
+  const [token, setToken] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<Category>("full-map");
@@ -69,11 +154,11 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [done, setDone] = useState<{ title: string; commitUrl: string } | null>(null);
   const viewers = useRef(new Map<string, ModelViewerElement>());
   const filesRef = useRef(files);
   filesRef.current = files;
 
-  useEffect(() => setPassword(loadPassword()), []);
   useEffect(() => () => filesRef.current.forEach((f) => URL.revokeObjectURL(f.objectUrl)), []);
 
   function addFiles(list: FileList | File[]) {
@@ -89,7 +174,7 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
       picked.push({ key: `${file.name}-${file.size}-${Math.random()}`, file, kind, objectUrl: URL.createObjectURL(file) });
     }
     setFiles((prev) => [...prev, ...picked]);
-    setError(rejected.length ? `Skipped unsupported or too large files: ${rejected.join(", ")}` : "");
+    setError(rejected.length ? `Skipped unsupported or over-50 MB files: ${rejected.join(", ")}` : "");
   }
 
   function removeFile(key: string) {
@@ -101,46 +186,43 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
     viewers.current.delete(key);
   }
 
-  async function uploadFile(id: string, file: File): Promise<string> {
-    if (mode === "blob") {
-      const result = await upload(`files/${id}/${safeName(file.name)}`, file, {
-        access: "public",
-        handleUploadUrl: "/api/blob-upload",
-        clientPayload: JSON.stringify({ password }),
-        multipart: file.size > 20 * 1024 * 1024,
-      });
-      return result.url;
-    }
-    const form = new FormData();
-    form.append("id", id);
-    form.append("file", file);
-    const res = await fetch("/api/upload", { method: "POST", body: form, headers: { "x-admin-password": password } });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
-    return data.url as string;
+  function reset() {
+    files.forEach((f) => URL.revokeObjectURL(f.objectUrl));
+    viewers.current.clear();
+    setFiles([]);
+    setTitle("");
+    setDescription("");
+    setTags("");
+    setStyle("");
+    setRobloxAssetId("");
+    setDone(null);
   }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (!token) return setError("Connect GitHub first.");
     if (!title.trim()) return setError("Give the example a title.");
     if (files.length === 0) return setError("Add at least one image or 3D model.");
     setBusy(true);
     setError("");
     try {
-      const auth = await fetch("/api/auth", { method: "POST", headers: { "x-admin-password": password } });
-      if (!auth.ok) throw new Error("Wrong password.");
-      savePassword(password);
-
       const id = `${slug(title) || "example"}-${Date.now().toString(36)}`;
+      const dir = exampleRepoDir(id);
+      const newFiles: NewFile[] = [];
       const images: Asset[] = [];
       const models: Asset[] = [];
-      let done = 0;
+      const used = new Set<string>();
+      const place = (name: string, content: Blob) => {
+        let fileName = safeName(name);
+        for (let n = 2; used.has(fileName); n++) fileName = `${n}-${safeName(name)}`;
+        used.add(fileName);
+        newFiles.push({ path: `${dir}/${fileName}`, content });
+        return `examples/${id}/${fileName}`;
+      };
+
       for (const picked of files) {
-        done += 1;
-        setStatus(`Uploading ${picked.file.name} (${done}/${files.length})`);
-        const url = await uploadFile(id, picked.file);
         const asset: Asset = {
-          url,
+          url: place(picked.file.name, picked.file),
           name: picked.file.name,
           size: picked.file.size,
           contentType: picked.file.type || "application/octet-stream",
@@ -154,37 +236,60 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
           setStatus(`Rendering a preview of ${picked.file.name} for Claude`);
           await waitForModel(viewer);
           const png = await viewer.toBlob({ mimeType: "image/png" });
-          const base = picked.file.name.replace(/\.[^.]+$/, "");
-          asset.previewUrl = await uploadFile(id, new File([png], `${base}.preview.png`, { type: "image/png" }));
+          asset.previewUrl = place(`${picked.file.name.replace(/\.[^.]+$/, "")}.preview.png`, png);
         }
         models.push(asset);
       }
 
-      setStatus("Saving example");
-      const res = await fetch("/api/examples", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-password": password },
-        body: JSON.stringify({
-          id,
-          title,
-          description,
-          category,
-          tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
-          style,
-          robloxAssetId,
-          images,
-          models,
-        }),
+      const cleanId = robloxAssetId.replace(/\D/g, "");
+      const example: Example = {
+        id,
+        title: title.trim(),
+        description: description.trim(),
+        category,
+        tags: [...new Set(tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean))],
+        style: style.trim(),
+        ...(cleanId ? { robloxAssetId: cleanId } : {}),
+        images,
+        models,
+        createdAt: new Date().toISOString(),
+      };
+
+      const commitUrl = await commitChanges(token, {
+        message: `Add example: ${example.title}`,
+        add: newFiles,
+        updateCatalog: (catalog) => ({ ...catalog, examples: [...catalog.examples, example] }),
+        onProgress: setStatus,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `Save failed (${res.status})`);
-      router.push(`/examples/${id}`);
-      router.refresh();
+      setDone({ title: example.title, commitUrl });
     } catch (err) {
       setError((err as Error).message);
-      setStatus("");
-      setBusy(false);
     }
+    setStatus("");
+    setBusy(false);
+  }
+
+  if (done) {
+    return (
+      <div className="success">
+        <p className="empty-title">“{done.title}” is saved.</p>
+        <p>
+          GitHub Pages is republishing the site. The example shows up in the library, and for Claude, in about one to
+          two minutes.
+        </p>
+        <div className="hero-actions">
+          <button className="btn btn-primary" onClick={reset}>
+            Upload another
+          </button>
+          <a className="btn" href={done.commitUrl} target="_blank" rel="noreferrer">
+            View commit
+          </a>
+          <a className="btn" href={`${REPO_URL}/actions`} target="_blank" rel="noreferrer">
+            Watch the deploy
+          </a>
+        </div>
+      </div>
+    );
   }
 
   const unpreviewable = files.some((f) => f.kind === "model" && !isPreviewableModel(f.file.name));
@@ -192,6 +297,8 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
 
   return (
     <form className="upload" onSubmit={onSubmit}>
+      <TokenPanel onReady={setToken} />
+
       <div
         className={`dropzone ${dragging ? "drag" : ""}`}
         onDragOver={(e) => {
@@ -217,7 +324,7 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
         />
         <label htmlFor="files">
           <strong>Drop images or 3D models here</strong>
-          <span>or click to choose · PNG, JPG, WebP · GLB, GLTF, FBX, OBJ, RBXM, RBXMX · up to 200 MB each</span>
+          <span>or click to choose · PNG, JPG, WebP · GLB, GLTF, FBX, OBJ, RBXM, RBXMX · up to 50 MB each</span>
         </label>
       </div>
 
@@ -308,28 +415,15 @@ export default function UploadForm({ mode, needsPassword }: { mode: "blob" | "lo
             placeholder="Claude can insert this model directly"
           />
         </label>
-        {needsPassword && (
-          <label className="field field-wide">
-            <span>Upload password</span>
-            <input
-              className="input"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-        )}
       </div>
 
       {error && <p className="error">{error}</p>}
       <div className="submit-row">
-        <button className="btn btn-primary" disabled={busy}>
-          {busy ? "Uploading…" : "Add to library"}
+        <button className="btn btn-primary" disabled={busy || !token}>
+          {busy ? "Saving…" : "Add to library"}
         </button>
         {status && <span className="muted">{status}</span>}
-        {mode === "local" && <span className="muted mode-note">Local mode: files are saved in .data/</span>}
+        <span className="muted mode-note">The repo is public, so uploads are public too.</span>
       </div>
     </form>
   );

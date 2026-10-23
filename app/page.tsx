@@ -1,14 +1,7 @@
 import Link from "next/link";
 import Gallery from "@/components/Gallery";
-import { listExamples } from "@/lib/storage";
 
-export const dynamic = "force-dynamic";
-
-export default async function Home() {
-  const examples = await listExamples();
-  const models = examples.reduce((n, e) => n + e.models.length, 0);
-  const images = examples.reduce((n, e) => n + e.images.length, 0);
-
+export default function Home() {
   return (
     <>
       <section className="hero">
@@ -54,14 +47,7 @@ export default async function Home() {
         </ol>
       </section>
 
-      <div className="section-head">
-        <h2>Library</h2>
-        <p className="muted">
-          {examples.length} example{examples.length === 1 ? "" : "s"} · {images} image{images === 1 ? "" : "s"} ·{" "}
-          {models} model{models === 1 ? "" : "s"}
-        </p>
-      </div>
-      <Gallery examples={examples} />
+      <Gallery />
     </>
   );
 }

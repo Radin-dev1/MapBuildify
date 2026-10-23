@@ -1,3 +1,4 @@
 {
-  "siteUrl": ""
+  "siteUrl": "https://radin-dev1.github.io/MapBuildify",
+  "fallbackUrl": "https://raw.githubusercontent.com/Radin-dev1/MapBuildify/main/public"
 }

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import Logo from "@/components/Logo";
+import { REPO_URL, siteUrl } from "@/lib/config";
 import "./globals.css";
 
 const display = Space_Grotesk({ subsets: ["latin"], variable: "--font-display" });
@@ -31,8 +32,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main>{children}</main>
         <footer className="footer">
           <span>MapBuildify</span>
-          <a href="/api/examples">Catalog JSON</a>
-          <a href="https://github.com/Radin-dev1/MapBuildify">GitHub</a>
+          <a href={siteUrl("examples/index.json")}>Catalog JSON</a>
+          <a href={REPO_URL}>GitHub</a>
         </footer>
       </body>
     </html>

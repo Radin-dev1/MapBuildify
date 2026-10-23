@@ -26,24 +26,50 @@ function parseArgs(argv) {
   return args;
 }
 
-async function resolveSite(args) {
-  if (args.site) return args.site;
-  if (process.env.MAPBUILDIFY_URL) return process.env.MAPBUILDIFY_URL;
+async function readConfig() {
   try {
-    const config = JSON.parse(await readFile(path.join(SKILL_DIR, "config.json"), "utf8"));
-    if (config.siteUrl) return config.siteUrl;
+    return JSON.parse(await readFile(path.join(SKILL_DIR, "config.json"), "utf8"));
   } catch {
-    // No config file: fall through.
+    return {};
   }
-  return null;
 }
 
-async function getCatalog(site, params) {
-  const url = new URL("/api/examples", site);
-  for (const [k, v] of Object.entries(params)) if (v) url.searchParams.set(k, String(v));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET ${url} returned ${res.status}`);
-  return res.json();
+function withSlash(url) {
+  return url.endsWith("/") ? url : `${url}/`;
+}
+
+/** Loads examples/index.json from the site, or from the repo's raw files if the site fails. */
+async function loadCatalog(sites) {
+  const errors = [];
+  for (const site of sites) {
+    const url = new URL(`examples/index.json?t=${Date.now()}`, withSlash(site));
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const catalog = await res.json();
+      return { site, examples: catalog.examples ?? [] };
+    } catch (error) {
+      errors.push(`${url.origin}${url.pathname}: ${error.message}`);
+    }
+  }
+  throw new Error(`could not load the catalog.\n  ${errors.join("\n  ")}`);
+}
+
+/** Same ranking as the website: category/tag filters, then most query words matched. */
+function rank(examples, { query, category, tag }) {
+  let result = [...examples].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  if (category) result = result.filter((e) => e.category === category);
+  if (tag) result = result.filter((e) => e.tags.some((t) => t.toLowerCase() === tag.toLowerCase()));
+  const words = (query ?? "").toLowerCase().split(/[^a-z0-9-]+/).filter((w) => w.length > 1);
+  if (words.length === 0) return result;
+  return result
+    .map((e) => {
+      const text = [e.title, e.description, e.category, e.style, ...e.tags].join(" ").toLowerCase();
+      return { e, score: words.filter((w) => text.includes(w)).length };
+    })
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((r) => r.e);
 }
 
 function safeName(name) {
@@ -67,8 +93,9 @@ async function main() {
     console.log("node fetch-examples.mjs --query <text> [--category c] [--tag t] [--limit n] [--models] [--out dir] [--site url]");
     return;
   }
-  const site = await resolveSite(args);
-  if (!site) {
+  const config = await readConfig();
+  const sites = [args.site ?? process.env.MAPBUILDIFY_URL ?? config.siteUrl, config.fallbackUrl].filter(Boolean);
+  if (sites.length === 0) {
     console.error(
       "No MapBuildify site URL. Pass --site <url>, set MAPBUILDIFY_URL, or set siteUrl in " +
         path.join(SKILL_DIR, "config.json"),
@@ -76,17 +103,26 @@ async function main() {
     process.exit(2);
   }
 
-  const filter = { category: args.category, tag: args.tag, limit: args.limit };
-  let catalog = await getCatalog(site, { ...filter, q: args.query });
-  let fallback = false;
-  if (catalog.count === 0 && (args.query || args.category || args.tag)) {
-    catalog = await getCatalog(site, { limit: args.limit });
-    fallback = true;
-  }
-  if (catalog.count === 0) {
+  const { site, examples: all } = await loadCatalog(sites);
+  if (all.length === 0) {
     console.log(`The MapBuildify library at ${site} is empty. Ask the user to upload examples first.`);
     process.exit(3);
   }
+  let selected = rank(all, args);
+  const fallback = selected.length === 0;
+  if (fallback) selected = rank(all, {});
+  selected = selected.slice(0, args.limit);
+  // Asset paths in the catalog are relative to the site root.
+  const abs = (url) => new URL(url, withSlash(site)).href;
+  const catalog = {
+    site,
+    count: selected.length,
+    examples: selected.map((e) => ({
+      ...e,
+      images: e.images.map((a) => ({ ...a, url: abs(a.url) })),
+      models: e.models.map((a) => ({ ...a, url: abs(a.url), ...(a.previewUrl ? { previewUrl: abs(a.previewUrl) } : {}) })),
+    })),
+  };
 
   const out = path.resolve(args.out);
   await mkdir(out, { recursive: true });
@@ -112,7 +148,7 @@ async function main() {
     lines.push(`- category: ${example.category}${example.style ? ` · style: ${example.style}` : ""}`);
     if (example.tags.length) lines.push(`- tags: ${example.tags.join(", ")}`);
     if (example.robloxAssetId) lines.push(`- Roblox asset ID: ${example.robloxAssetId} (insert it instead of rebuilding)`);
-    lines.push(`- page: ${new URL(`/examples/${example.id}`, site)}`);
+    lines.push(`- page: ${new URL(`example/?id=${example.id}`, withSlash(site))}`);
     lines.push("", `**Notes from the user:** ${example.description || "(none)"}`, "");
 
     const images = example.images.slice(0, MAX_IMAGES_PER_EXAMPLE);

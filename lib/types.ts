@@ -27,9 +27,11 @@ export const MODEL_EXTENSIONS = [".glb", ".gltf", ".fbx", ".obj", ".rbxm", ".rbx
 /** Formats the browser can render in 3D (and auto-screenshot for Claude). */
 export const PREVIEWABLE_MODEL_EXTENSIONS = [".glb", ".gltf"];
 
-export const MAX_FILE_BYTES = 200 * 1024 * 1024;
+/** GitHub rejects files over 100 MB and warns above 50 MB. */
+export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 export interface Asset {
+  /** Path relative to the site root, e.g. "examples/<id>/shot.png". */
   url: string;
   name: string;
   size: number;

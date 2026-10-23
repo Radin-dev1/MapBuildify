@@ -1,24 +1,43 @@
-import type { Metadata } from "next";
+"use client";
+
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import DeleteButton from "@/components/DeleteButton";
 import ModelViewer from "@/components/ModelViewer";
-import { passwordRequired } from "@/lib/auth";
-import { getExample } from "@/lib/storage";
-import { CATEGORY_LABELS, extensionOf, formatBytes, isPreviewableModel } from "@/lib/types";
+import { loadCatalog } from "@/lib/catalog";
+import { siteUrl } from "@/lib/config";
+import { CATEGORY_LABELS, extensionOf, formatBytes, isPreviewableModel, type Example } from "@/lib/types";
 
-export const dynamic = "force-dynamic";
+export default function ExampleView() {
+  const id = useSearchParams().get("id");
+  const [example, setExample] = useState<Example | null | undefined>(undefined);
+  const [error, setError] = useState("");
 
-type Props = { params: Promise<{ id: string }> };
+  useEffect(() => {
+    loadCatalog().then(
+      (examples) => setExample(examples.find((e) => e.id === id) ?? null),
+      (e: Error) => setError(e.message),
+    );
+  }, [id]);
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const example = await getExample((await params).id);
-  return { title: example ? `${example.title} · MapBuildify` : "Not found · MapBuildify" };
-}
+  useEffect(() => {
+    if (example) document.title = `${example.title} · MapBuildify`;
+  }, [example]);
 
-export default async function ExamplePage({ params }: Props) {
-  const example = await getExample((await params).id);
-  if (!example) notFound();
+  if (error) return <p className="error detail">{error}</p>;
+  if (example === undefined) return <p className="muted detail">Loading…</p>;
+  if (example === null) {
+    return (
+      <div className="empty">
+        <p className="empty-title">That example doesn&apos;t exist (yet).</p>
+        <p>If you just uploaded it, GitHub Pages takes a minute or two to publish it.</p>
+        <Link href="/" className="btn">
+          Back to the library
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <article className="detail">
@@ -38,9 +57,6 @@ export default async function ExamplePage({ params }: Props) {
             ))}
           </div>
         </div>
-        <a className="btn" href={`/api/examples/${example.id}`}>
-          View JSON
-        </a>
       </header>
 
       {example.description && (
@@ -62,9 +78,9 @@ export default async function ExamplePage({ params }: Props) {
           <h2>Images</h2>
           <div className="shots">
             {example.images.map((img) => (
-              <a key={img.url} href={img.url} target="_blank" rel="noreferrer" className="shot">
+              <a key={img.url} href={siteUrl(img.url)} target="_blank" rel="noreferrer" className="shot">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img.url} alt={img.name} />
+                <img src={siteUrl(img.url)} alt={img.name} />
               </a>
             ))}
           </div>
@@ -78,7 +94,7 @@ export default async function ExamplePage({ params }: Props) {
             {example.models.map((m) => (
               <div key={m.url} className="model">
                 {isPreviewableModel(m.name) ? (
-                  <ModelViewer src={m.url} alt={m.name} className="viewer-large" />
+                  <ModelViewer src={siteUrl(m.url)} alt={m.name} className="viewer-large" />
                 ) : (
                   <div className="card-placeholder viewer-large">
                     {extensionOf(m.name).slice(1).toUpperCase()} · no browser preview
@@ -87,7 +103,7 @@ export default async function ExamplePage({ params }: Props) {
                 <div className="model-info">
                   <span>{m.name}</span>
                   <span className="muted">{formatBytes(m.size)}</span>
-                  <a href={m.url} download>
+                  <a href={siteUrl(m.url)} download>
                     Download
                   </a>
                 </div>
@@ -99,7 +115,7 @@ export default async function ExamplePage({ params }: Props) {
 
       <footer className="detail-foot">
         <span className="muted">Added {new Date(example.createdAt).toLocaleDateString("en", { dateStyle: "medium" })}</span>
-        <DeleteButton id={example.id} needsPassword={passwordRequired()} />
+        <DeleteButton example={example} />
       </footer>
     </article>
   );

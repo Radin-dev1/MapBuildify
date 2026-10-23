@@ -22,8 +22,11 @@ node "<skill-dir>/scripts/fetch-examples.mjs" --query "<the user's request in a 
 ```
 
 - `<skill-dir>` is the folder this SKILL.md is in (usually `~/.claude/skills/mapbuildify`).
-- It reads the site URL from `--site`, then the `MAPBUILDIFY_URL` env var, then `config.json`
-  next to this file. If none is set, ask the user for their MapBuildify site URL and pass `--site`.
+- It reads the site URL from `--site`, then the `MAPBUILDIFY_URL` env var, then `siteUrl` in
+  `config.json` next to this file (the GitHub Pages site). If the site can't be reached it falls
+  back to the repo's raw files (`fallbackUrl`).
+- Examples uploaded in the last couple of minutes may not be on the Pages site yet. If the user
+  mentions one you don't see, re-run with `--site <fallbackUrl from config.json>`.
 - Useful flags: `--category terrain|building|interior|prop|layout|lighting|full-map|other`,
   `--tag <tag>`, `--limit <n>` (default 8), `--models` (also download model files),
   `--out <dir>` (default `.mapbuildify/examples` in the current folder).
@@ -32,8 +35,9 @@ node "<skill-dir>/scripts/fetch-examples.mjs" --query "<the user's request in a 
 It downloads every example image and every 3D-model preview, then writes `BRIEF.md` in the output
 folder listing each example with its notes, tags, style, asset ID and the local path of every file.
 
-No Node? Fetch `<site>/api/examples?q=<query>` directly (it is public JSON) and download the
-`images[].url` and `models[].previewUrl` files yourself.
+No Node? Fetch `<site>/examples/index.json` directly (public JSON), pick the relevant examples,
+and download their `images[].url` and `models[].previewUrl` files yourself. Those paths are
+relative to `<site>/`.
 
 If the site is unreachable or the library is empty, tell the user and ask whether to build
 without examples. Do not silently skip this step.
