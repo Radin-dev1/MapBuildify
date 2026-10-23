@@ -1,4 +1,26 @@
 {
   "version": 1,
-  "examples": []
+  "examples": [
+    {
+      "id": "e2e-test-example",
+      "title": "E2E test forest",
+      "description": "Temporary test example.",
+      "category": "full-map",
+      "tags": [
+        "forest",
+        "test"
+      ],
+      "style": "stud",
+      "images": [
+        {
+          "url": "examples/e2e-test-example/forest-topdown.png",
+          "name": "forest-topdown.png",
+          "size": 23975,
+          "contentType": "image/png"
+        }
+      ],
+      "models": [],
+      "createdAt": "2026-10-23T22:01:04.220Z"
+    }
+  ]
 }
